@@ -45,11 +45,11 @@ export async function POST(request: NextRequest) {
       }, { status: 400 })
     }
 
-    // Validate file size (max 20MB)
-    if (!validateImageSize(imageFile.size, 20)) {
+    // Validate file size (max 4.5MB)
+    if (!validateImageSize(imageFile.size, 4.5)) {
       return NextResponse.json({ 
         success: false,
-        error: `File too large: ${Math.round(imageFile.size / 1024 / 1024)}MB. Maximum size: 20MB` 
+        error: `File too large: ${Math.round(imageFile.size / 1024 / 1024 * 10) / 10}MB. Maximum size: 4.5MB` 
       }, { status: 400 })
     }
 

@@ -47,6 +47,14 @@ export function FileUploader({ onFileChange }: FileUploaderProps) {
 
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const file = e.dataTransfer.files[0]
+      
+      // Check file size limit (4.5MB)
+      const maxSize = 4.5 * 1024 * 1024; // 4.5MB in bytes
+      if (file.size > maxSize) {
+        alert('File too large. Please select a file smaller than 4.5MB.')
+        return
+      }
+      
       const fileType = getFileType(file)
       
       if (fileType) {
@@ -61,6 +69,15 @@ export function FileUploader({ onFileChange }: FileUploaderProps) {
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       const file = e.target.files[0]
+      
+      // Check file size limit (4.5MB)
+      const maxSize = 4.5 * 1024 * 1024; // 4.5MB in bytes
+      if (file.size > maxSize) {
+        alert('File too large. Please select a file smaller than 4.5MB.')
+        e.target.value = '' // Clear the input
+        return
+      }
+      
       const fileType = getFileType(file)
       
       if (fileType) {
@@ -109,9 +126,9 @@ export function FileUploader({ onFileChange }: FileUploaderProps) {
         </Button>
       </div>
       
-      <p className="mt-2 text-xs text-gray-400">
-        Supported: PDF, JPEG, PNG, WebP, GIF, BMP, TIFF (max 20MB)
-      </p>
+              <p className="mt-2 text-xs text-gray-400">
+          Supported: PDF, JPEG, PNG, WebP, GIF, BMP, TIFF (max 4.5MB)
+        </p>
     </div>
   )
 }

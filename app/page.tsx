@@ -37,6 +37,18 @@ export default function Home() {
     }
   }
 
+  const removeDuplicateQAPairs = (qaPairs: QAPair[]): QAPair[] => {
+    const seen = new Set<string>()
+    return qaPairs.filter(qa => {
+      const key = `${qa.question.toLowerCase().trim()}:${qa.options.join('|').toLowerCase()}`
+      if (seen.has(key)) {
+        return false
+      }
+      seen.add(key)
+      return true
+    })
+  }
+
   const handleSubmit = async () => {
     if (!file || !fileType) {
       setError("Please select a file")
@@ -49,42 +61,91 @@ export default function Home() {
       setError(null)
 
       if (fileType === 'pdf') {
-        // Handle PDF processing for Q&A extraction
-        setProcessingStage("Extracting text from PDF")
-        setProgress(10)
+        // Handle PDF processing for Q&A extraction with chunk-based progress
+        setProcessingStage("Extracting text chunks from PDF")
+        setProgress(5)
         
-        // Create a FormData object to send the file
+        // Step 1: Extract chunks from PDF
         const formData = new FormData()
         formData.append("pdf", file)
 
-        // Call the PDF processing API
-        const response = await fetch('/api/process-pdf', {
+        const chunksResponse = await fetch('/api/extract-chunks', {
           method: 'POST',
           body: formData,
         })
 
-        setProgress(50)
+        setProgress(15)
 
-        if (!response.ok) {
-          const errorData = await response.json()
-          throw new Error(errorData.error || 'PDF processing failed')
+        if (!chunksResponse.ok) {
+          const errorData = await chunksResponse.json()
+          throw new Error(errorData.error || 'PDF chunk extraction failed')
         }
 
-        const result = await response.json()
+        const chunksResult = await chunksResponse.json()
         
-        setProgress(90)
-
-        if (!result.success || !result.data) {
-          throw new Error(result.error || 'Failed to extract Q&A pairs from PDF')
+        if (!chunksResult.success || !chunksResult.data?.chunks) {
+          throw new Error(chunksResult.error || 'Failed to extract chunks from PDF')
         }
 
+        const chunks = chunksResult.data.chunks
+        const totalChunks = chunks.length
+        let allQAPairs: QAPair[] = []
+
+        setProcessingStage(`Processing ${totalChunks} page chunks for Q&A extraction`)
+        
+        // Step 2: Process each chunk individually with progress updates
+        for (let i = 0; i < chunks.length; i++) {
+          const chunk = chunks[i]
+          setProcessingStage(`Processing chunk ${i + 1}/${totalChunks} (Pages ${chunk.pageRange})`)
+          
+          // Calculate progress: 15% for extraction + 80% for processing chunks + 5% for completion
+          const chunkProgress = 15 + Math.round((i / totalChunks) * 80)
+          setProgress(chunkProgress)
+
+          try {
+            const chunkResponse = await fetch('/api/process-chunk', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                text: chunk.text,
+                pageRange: chunk.pageRange,
+                chunkIndex: i,
+                totalChunks: totalChunks
+              }),
+            })
+
+            if (!chunkResponse.ok) {
+              const errorData = await chunkResponse.json()
+              console.warn(`Failed to process chunk ${i + 1}: ${errorData.error}`)
+              continue // Skip failed chunks but continue processing
+            }
+
+            const chunkResult = await chunkResponse.json()
+            
+            if (chunkResult.success && chunkResult.data?.qaPairs) {
+              allQAPairs.push(...chunkResult.data.qaPairs)
+            }
+          } catch (chunkError) {
+            console.warn(`Error processing chunk ${i + 1}:`, chunkError)
+            // Continue processing other chunks
+          }
+        }
+
+        setProcessingStage("Finalizing Q&A pairs")
+        setProgress(95)
+
+        // Remove duplicates if any
+        const uniqueQAPairs = removeDuplicateQAPairs(allQAPairs)
+        
         setProcessingStage("Processing complete")
-        setQAPairs(result.data.qaPairs || [])
+        setQAPairs(uniqueQAPairs)
         setProgress(100)
         
         // Store Q&A pairs in localStorage for quiz mode
-        if (result.data.qaPairs && result.data.qaPairs.length > 0) {
-          localStorage.setItem('quiz-questions', JSON.stringify(result.data.qaPairs))
+        if (uniqueQAPairs.length > 0) {
+          localStorage.setItem('quiz-questions', JSON.stringify(uniqueQAPairs))
         }
         
       } else if (fileType === 'image') {

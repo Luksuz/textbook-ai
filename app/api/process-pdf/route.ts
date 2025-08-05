@@ -42,12 +42,12 @@ export async function POST(request: NextRequest) {
       }, { status: 400 })
     }
 
-    // Validate file size (max 50MB for PDFs)
-    const maxSize = 50 * 1024 * 1024 // 50MB
+    // Validate file size (max 4.5MB for PDFs)
+    const maxSize = 4.5 * 1024 * 1024 // 4.5MB
     if (pdfFile.size > maxSize) {
       return NextResponse.json({ 
         success: false,
-        error: `File too large: ${Math.round(pdfFile.size / 1024 / 1024)}MB. Maximum size: 50MB` 
+        error: `File too large: ${Math.round(pdfFile.size / 1024 / 1024 * 10) / 10}MB. Maximum size: 4.5MB` 
       }, { status: 400 })
     }
 
