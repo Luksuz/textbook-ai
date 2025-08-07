@@ -9,23 +9,33 @@ import { Progress } from "@/components/ui/progress"
 import type { QAPair, ImageExtractionResult } from "@/lib/types"
 import { FileUploader } from "@/components/FileUploader"
 import { QAPairList } from "@/components/QAPairList"
+import { MultiFileDisplay } from "@/components/MultiFileDisplay"
 import { AlertCircle, FileText, Upload, Image, Brain, Play } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { ChatBot } from "@/components/ChatBot"
 
 export default function Home() {
   const router = useRouter()
-  const [file, setFile] = useState<File | null>(null)
-  const [fileType, setFileType] = useState<'pdf' | 'image' | null>(null)
+  const [files, setFiles] = useState<File[]>([])
+  const [fileTypes, setFileTypes] = useState<('pdf' | 'image')[]>([])
   const [isProcessing, setIsProcessing] = useState(false)
   const [progress, setProgress] = useState(0)
   const [qaPairs, setQAPairs] = useState<QAPair[]>([])
   const [error, setError] = useState<string | null>(null)
   const [processingStage, setProcessingStage] = useState<string>("")
 
-  const handleFileChange = (selectedFile: File | null, selectedFileType?: 'pdf' | 'image') => {
-    setFile(selectedFile)
-    setFileType(selectedFileType || null)
+  const handleFileChange = (selectedFiles: File[] | null, selectedFileTypes?: ('pdf' | 'image')[]) => {
+    setFiles(selectedFiles || [])
+    setFileTypes(selectedFileTypes || [])
+    setError(null)
+    setQAPairs([])
+  }
+
+  const handleRemoveFile = (index: number) => {
+    const newFiles = files.filter((_, i) => i !== index)
+    const newFileTypes = fileTypes.filter((_, i) => i !== index)
+    setFiles(newFiles)
+    setFileTypes(newFileTypes)
     setError(null)
     setQAPairs([])
   }
@@ -50,8 +60,17 @@ export default function Home() {
   }
 
   const handleSubmit = async () => {
-    if (!file || !fileType) {
-      setError("Please select a file")
+    if (!files.length || !fileTypes.length) {
+      setError("Please select at least one file")
+      return
+    }
+
+    // Check total file size
+    const totalSize = files.reduce((sum, file) => sum + file.size, 0)
+    const maxSize = 4.5 * 1024 * 1024; // 4.5MB in bytes
+    if (totalSize > maxSize) {
+      const totalSizeMB = Math.round(totalSize / 1024 / 1024 * 10) / 10
+      setError(`Total file size too large: ${totalSizeMB}MB. Maximum total size: 4.5MB`)
       return
     }
 
@@ -59,137 +78,156 @@ export default function Home() {
       setIsProcessing(true)
       setProgress(0)
       setError(null)
-
-      if (fileType === 'pdf') {
-        // Handle PDF processing for Q&A extraction with chunk-based progress
-        setProcessingStage("Extracting text chunks from PDF")
-        setProgress(5)
+      
+      let allQAPairs: QAPair[] = []
+      const totalFiles = files.length
+      
+      // Process each file sequentially
+      for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
+        const file = files[fileIndex]
+        const fileType = fileTypes[fileIndex]
         
-        // Step 1: Extract chunks from PDF
-        const formData = new FormData()
-        formData.append("pdf", file)
-
-        const chunksResponse = await fetch('/api/extract-chunks', {
-          method: 'POST',
-          body: formData,
-        })
-
-        setProgress(15)
-
-        if (!chunksResponse.ok) {
-          const errorData = await chunksResponse.json()
-          throw new Error(errorData.error || 'PDF chunk extraction failed')
-        }
-
-        const chunksResult = await chunksResponse.json()
+        setProcessingStage(`Processing file ${fileIndex + 1}/${totalFiles}: ${file.name}`)
         
-        if (!chunksResult.success || !chunksResult.data?.chunks) {
-          throw new Error(chunksResult.error || 'Failed to extract chunks from PDF')
-        }
-
-        const chunks = chunksResult.data.chunks
-        const totalChunks = chunks.length
-        let allQAPairs: QAPair[] = []
-
-        setProcessingStage(`Processing ${totalChunks} page chunks for Q&A extraction`)
+        // Calculate base progress for this file
+        const fileBaseProgress = Math.round((fileIndex / totalFiles) * 95)
+        const fileProgressRange = Math.round(95 / totalFiles)
         
-        // Step 2: Process each chunk individually with progress updates
-        for (let i = 0; i < chunks.length; i++) {
-          const chunk = chunks[i]
-          setProcessingStage(`Processing chunk ${i + 1}/${totalChunks} (Pages ${chunk.pageRange})`)
+        if (fileType === 'pdf') {
+          // Handle PDF processing for Q&A extraction with chunk-based progress
+          setProcessingStage(`Extracting text chunks from PDF: ${file.name}`)
+          setProgress(fileBaseProgress + Math.round(fileProgressRange * 0.1))
           
-          // Calculate progress: 15% for extraction + 80% for processing chunks + 5% for completion
-          const chunkProgress = 15 + Math.round((i / totalChunks) * 80)
-          setProgress(chunkProgress)
+          // Step 1: Extract chunks from PDF
+          const formData = new FormData()
+          formData.append("pdf", file)
 
-          try {
-            const chunkResponse = await fetch('/api/process-chunk', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                text: chunk.text,
-                pageRange: chunk.pageRange,
-                chunkIndex: i,
-                totalChunks: totalChunks
-              }),
-            })
+          const chunksResponse = await fetch('/api/extract-chunks', {
+            method: 'POST',
+            body: formData,
+          })
 
-            if (!chunkResponse.ok) {
-              const errorData = await chunkResponse.json()
-              console.warn(`Failed to process chunk ${i + 1}: ${errorData.error}`)
-              continue // Skip failed chunks but continue processing
-            }
+          setProgress(fileBaseProgress + Math.round(fileProgressRange * 0.2))
 
-            const chunkResult = await chunkResponse.json()
+          if (!chunksResponse.ok) {
+            const errorData = await chunksResponse.json()
+            console.warn(`Failed to extract chunks from ${file.name}: ${errorData.error}`)
+            continue // Skip this file and continue with next
+          }
+
+          const chunksResult = await chunksResponse.json()
+          
+          if (!chunksResult.success || !chunksResult.data?.chunks) {
+            console.warn(`Failed to extract chunks from ${file.name}: ${chunksResult.error || 'Unknown error'}`)
+            continue // Skip this file and continue with next
+          }
+
+          const chunks = chunksResult.data.chunks
+          const totalChunks = chunks.length
+          let fileQAPairs: QAPair[] = []
+
+          setProcessingStage(`Processing ${totalChunks} page chunks from ${file.name}`)
+        
+          // Step 2: Process each chunk individually with progress updates
+          for (let i = 0; i < chunks.length; i++) {
+            const chunk = chunks[i]
+            setProcessingStage(`Processing chunk ${i + 1}/${totalChunks} from ${file.name} (Pages ${chunk.pageRange})`)
             
-            if (chunkResult.success && chunkResult.data?.qaPairs) {
-              allQAPairs.push(...chunkResult.data.qaPairs)
+            // Calculate progress within this file's range
+            const chunkProgress = fileBaseProgress + Math.round(fileProgressRange * (0.2 + (i / totalChunks) * 0.7))
+            setProgress(chunkProgress)
+
+            try {
+              const chunkResponse = await fetch('/api/process-chunk', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  text: chunk.text,
+                  pageRange: chunk.pageRange,
+                  chunkIndex: i,
+                  totalChunks: totalChunks
+                }),
+              })
+
+              if (!chunkResponse.ok) {
+                const errorData = await chunkResponse.json()
+                console.warn(`Failed to process chunk ${i + 1} from ${file.name}: ${errorData.error}`)
+                continue // Skip failed chunks but continue processing
+              }
+
+              const chunkResult = await chunkResponse.json()
+              
+              if (chunkResult.success && chunkResult.data?.qaPairs) {
+                fileQAPairs.push(...chunkResult.data.qaPairs)
+              }
+            } catch (chunkError) {
+              console.warn(`Error processing chunk ${i + 1} from ${file.name}:`, chunkError)
+              // Continue processing other chunks
             }
-          } catch (chunkError) {
-            console.warn(`Error processing chunk ${i + 1}:`, chunkError)
-            // Continue processing other chunks
+          }
+
+          // Add this file's Q&A pairs to the overall collection
+          allQAPairs.push(...fileQAPairs)
+          
+        } else if (fileType === 'image') {
+          // Handle image processing for Q&A extraction
+          setProcessingStage(`Processing image: ${file.name}`)
+          setProgress(fileBaseProgress + Math.round(fileProgressRange * 0.2))
+
+          // Create a FormData object to send the image
+          const formData = new FormData()
+          formData.append("image", file)
+
+          // Call the image processing API
+          const response = await fetch('/api/process-image', {
+            method: 'POST',
+            body: formData,
+          })
+
+          setProgress(fileBaseProgress + Math.round(fileProgressRange * 0.6))
+
+          if (!response.ok) {
+            const errorData = await response.json()
+            console.warn(`Failed to process image ${file.name}: ${errorData.error}`)
+            continue // Skip this file and continue with next
+          }
+
+          const result: ImageExtractionResult = await response.json()
+          
+          setProgress(fileBaseProgress + Math.round(fileProgressRange * 0.9))
+
+          if (!result.success || !result.data) {
+            console.warn(`Failed to extract Q&A pairs from ${file.name}: ${result.error || 'Unknown error'}`)
+            continue // Skip this file and continue with next
+          }
+
+          // Add this file's Q&A pairs to the overall collection
+          if (result.data.qaPairs && result.data.qaPairs.length > 0) {
+            allQAPairs.push(...result.data.qaPairs)
           }
         }
+      }
+      
+      // Finalize processing for all files
+      setProcessingStage("Finalizing Q&A pairs from all files")
+      setProgress(95)
 
-        setProcessingStage("Finalizing Q&A pairs")
-        setProgress(95)
-
-        // Remove duplicates if any
-        const uniqueQAPairs = removeDuplicateQAPairs(allQAPairs)
-        
-        setProcessingStage("Processing complete")
-        setQAPairs(uniqueQAPairs)
-        setProgress(100)
-        
-        // Store Q&A pairs in localStorage for quiz mode
-        if (uniqueQAPairs.length > 0) {
-          localStorage.setItem('quiz-questions', JSON.stringify(uniqueQAPairs))
-        }
-        
-      } else if (fileType === 'image') {
-        // Handle image processing for VCA extraction
-        setProcessingStage("Processing image with Document AI and LangChain")
-        setProgress(10)
-
-        // Create a FormData object to send the image
-        const formData = new FormData()
-        formData.append("image", file)
-
-        // Call the image processing API
-        const response = await fetch('/api/process-image', {
-          method: 'POST',
-          body: formData,
-        })
-
-        setProgress(50)
-
-        if (!response.ok) {
-          const errorData = await response.json()
-          throw new Error(errorData.error || 'Image processing failed')
-        }
-
-        const result: ImageExtractionResult = await response.json()
-        
-        setProgress(90)
-
-        if (!result.success || !result.data) {
-          throw new Error(result.error || 'Failed to extract Q&A pairs from image')
-        }
-
-        setProcessingStage("Processing complete")
-        setQAPairs(result.data.qaPairs || [])
-        setProgress(100)
-        
-        // Store Q&A pairs in localStorage for quiz mode
-        if (result.data.qaPairs && result.data.qaPairs.length > 0) {
-          localStorage.setItem('quiz-questions', JSON.stringify(result.data.qaPairs))
-        }
+      // Remove duplicates across all files
+      const uniqueQAPairs = removeDuplicateQAPairs(allQAPairs)
+      
+      setProcessingStage("Processing complete")
+      setQAPairs(uniqueQAPairs)
+      setProgress(100)
+      
+      // Store Q&A pairs in localStorage for quiz mode
+      if (uniqueQAPairs.length > 0) {
+        localStorage.setItem('quiz-questions', JSON.stringify(uniqueQAPairs))
       }
     } catch (err) {
-      console.error(`Error processing ${fileType}:`, err)
-      setError(`Failed to process ${fileType}. Please try again with a different file.`)
+      console.error(`Error processing files:`, err)
+      setError(`Failed to process files. Please try again with different files.`)
     } finally {
       setIsProcessing(false)
     }
@@ -201,52 +239,29 @@ export default function Home() {
         Document Q&A Extraction
       </h1>
       <p className="text-gray-600 mb-8 text-center">
-        Upload a PDF or Image to extract Q&A pairs from educational content
+        Upload multiple PDFs and/or Images to extract Q&A pairs from educational content (4.5MB total)
       </p>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              {fileType === 'image' ? (
-                <>
-                  <Image className="h-5 w-5" />
-                  Upload Image for Q&A
-                </>
-              ) : (
-                <>
-                  <FileText className="h-5 w-5" />
-                  Upload PDF or Image
-                </>
-              )}
+              <Upload className="h-5 w-5" />
+              Upload Multiple Files
             </CardTitle>
             <CardDescription>
-              {fileType === 'image' 
-                ? "Processing image for Q&A extraction using Document AI and OpenAI"
-                : "Select a PDF or image to extract Q&A pairs from educational content"
-              }
+              Select multiple PDFs and/or images to extract Q&A pairs from educational content (4.5MB total)
             </CardDescription>
           </CardHeader>
           <CardContent>
             <FileUploader onFileChange={handleFileChange} />
 
-            {file && (
-              <div className="mt-4 flex items-center gap-2 text-sm">
-                {fileType === 'image' ? (
-                  <Image size={16} />
-                ) : (
-                  <FileText size={16} />
-                )}
-                <span>
-                  {file.name} ({(file.size / (1024 * 1024)).toFixed(2)} MB)
-                </span>
-                {fileType && (
-                  <span className="ml-2 px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full">
-                    {fileType.toUpperCase()}
-                  </span>
-                )}
-              </div>
-            )}
+            <MultiFileDisplay 
+              files={files} 
+              fileTypes={fileTypes} 
+              onRemoveFile={handleRemoveFile}
+              showRemoveButton={!isProcessing}
+            />
 
             {isProcessing && (
               <div className="mt-6">
@@ -267,8 +282,16 @@ export default function Home() {
             )}
           </CardContent>
           <CardFooter>
-            <Button onClick={handleSubmit} disabled={!file || isProcessing} className="w-full">
-              {isProcessing ? "Processing..." : "Extract Q&A Pairs"}
+            <Button 
+              onClick={handleSubmit} 
+              disabled={
+                !files.length || 
+                isProcessing || 
+                files.reduce((sum, file) => sum + file.size, 0) > 4.5 * 1024 * 1024
+              } 
+              className="w-full"
+            >
+              {isProcessing ? "Processing..." : `Extract Q&A Pairs from ${files.length} file${files.length !== 1 ? 's' : ''}`}
               {!isProcessing && <Upload className="ml-2 h-4 w-4" />}
             </Button>
           </CardFooter>
@@ -281,7 +304,7 @@ export default function Home() {
               Extracted Q&A Pairs
             </CardTitle>
             <CardDescription>
-              {qaPairs.length > 0 ? `Found ${qaPairs.length} Q&A pairs from the ${fileType || 'document'}` :
+              {qaPairs.length > 0 ? `Found ${qaPairs.length} Q&A pairs from ${files.length} file${files.length !== 1 ? 's' : ''}` :
                "Q&A pairs will appear here after processing"}
             </CardDescription>
             {qaPairs.length > 0 && (
@@ -310,8 +333,8 @@ export default function Home() {
             ) : (
               <div className="text-center py-12 text-gray-500">
                 {isProcessing
-                  ? `Processing ${fileType || 'file'}...`
-                  : `No Q&A pairs extracted yet. Upload and process a ${fileType || 'document'} to get started.`}
+                  ? `Processing ${files.length} file${files.length !== 1 ? 's' : ''}...`
+                  : `No Q&A pairs extracted yet. Upload and process files to get started.`}
               </div>
             )}
           </CardContent>
